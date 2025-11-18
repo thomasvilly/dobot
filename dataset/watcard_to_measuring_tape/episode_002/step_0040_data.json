@@ -1,0 +1,30 @@
+{
+  "language_instruction": "Pick up the watcard and put it on top of the measuring tape",
+  "current_pose": [
+    203.6079559326172,
+    48.694602966308594,
+    -20.28612518310547,
+    10.800000190734863
+  ],
+  "action": {
+    "delta_vector": [
+      1.8986778259277344,
+      12.050899505615234,
+      0.04770660400390625,
+      3.1999998092651367
+    ],
+    "gripper_closed": 1,
+    "terminate_episode": 0
+  },
+  "next_pose_absolute": [
+    205.50663375854492,
+    60.74550247192383,
+    -20.238418579101562,
+    14.0
+  ],
+  "segment_desc": "Move to Tape",
+  "images": {
+    "cam1": "step_0040_cam1.jpg",
+    "cam2": "step_0040_cam2.jpg"
+  }
+}

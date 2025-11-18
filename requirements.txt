@@ -1,0 +1,5 @@
+opencv-python
+numpy
+json_numpy
+requests
+pynput

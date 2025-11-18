@@ -1,0 +1,30 @@
+{
+  "language_instruction": "Pick up the watcard and put it on top of the measuring tape",
+  "current_pose": [
+    195.66192626953125,
+    58.15691375732422,
+    22.40753173828125,
+    -6.466976165771484
+  ],
+  "action": {
+    "delta_vector": [
+      -1.097740536644352,
+      -10.47981879824684,
+      -6.906334286644345,
+      -1.6195891244070868
+    ],
+    "gripper_closed": 0,
+    "terminate_episode": 0
+  },
+  "next_pose_absolute": [
+    194.5641857328869,
+    47.67709495907738,
+    15.501197451636905,
+    -8.086565290178571
+  ],
+  "segment_desc": "Approach Card",
+  "images": {
+    "cam1": "step_0004_cam1.jpg",
+    "cam2": "step_0004_cam2.jpg"
+  }
+}

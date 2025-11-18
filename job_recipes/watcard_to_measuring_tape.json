@@ -1,0 +1,16 @@
+{
+  "job_id": "watcard_to_measuring_tape",
+  "instruction": "Pick up the watcard and put it on top of the measuring tape",
+  "settings": {
+    "step_size_mm": 12.0,
+    "wait_time_sec": 0.2
+  },
+  "segments": [
+    { "type": "move", "target": [177, -120, -95, -34], "desc": "Approach Card" },
+    { "type": "action", "suction": 1, "desc": "Grab Card" },
+    { "type": "move", "target": [177, -120, -20, -34], "desc": "Lift Card" },
+    { "type": "move", "target": [215, 121, -20, 30], "desc": "Move to Tape" },
+    { "type": "action", "suction": 0, "desc": "Drop Card" },
+    { "type": "move", "target": [200, 0, 50, 0], "desc": "Return Home" }
+  ]
+}
