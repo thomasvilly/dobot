@@ -102,7 +102,8 @@ t_ = time.time()
 # initialize the camera
 
 # Open webcam
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(1)
+cap2 = cv2.VideoCapture(2) # Ensure this is your second camera index
 
 print(f"Took {time.time()-t_}s to startup camera")
 t_ = time.time()
@@ -148,12 +149,22 @@ try:
     while True:
         loop_start_time = time.time()
         
-        # 1. Get image from local camera
+        # 1. Get image from local cameras
         ret, frame = cap.read()
-        if not ret:
+        ret2, frame2 = cap2.read()
+        
+        if not ret or not ret2:
+            print("Frame drop")
             break
             
-        cv2.imshow('VLA Project Feed', frame)
+        # --- STITCHING LOGIC START ---
+        # Resize to 224x224 so the stitched result is 448x224 (OpenVLA standard)
+        im1 = cv2.resize(frame, (224, 224))
+        im2 = cv2.resize(frame2, (224, 224))
+        stitched = np.hstack((im1, im2))
+        
+        cv2.imshow('VLA Project Feed', stitched)
+        # --- STITCHING LOGIC END ---
         
         # (We don't need joint angles for the VLA, just for the Dobot)
         pose = dType.GetPose(api)
@@ -163,7 +174,7 @@ try:
         current_r = pose[3]
 
         # 2. Package the payload for the server
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frame_rgb = cv2.cvtColor(stitched, cv2.COLOR_BGR2RGB)
         payload = {
             "image": frame_rgb,
             "instruction": instruction,
@@ -207,16 +218,19 @@ try:
         print(f"Action taken = dx: {target_x}, dy: {target_y}, dz: {target_z}, d_yaw: {target_r}, gripper: {gripper}")
         
         # 5. Command the Dobot
+        # CHANGED: isQueued=0 (Must be 0 for immediate control)
         dType.SetPTPCmd(api, dType.PTPMode.PTPMOVLXYZMode, 
-                target_x, target_y, target_z, target_r, isQueued=1)        
+                target_x, target_y, target_z, target_r, isQueued=0)        
 
-        # 6. End effector: need to determine if we are gripper or suction cup
+        # 6. End effector: switched to Suction Cup
         # Set a threshold. If the VLA is "more than 50% closed",
         # Command to close gripper (or turn on suction)
         gripper_value = 1 if gripper > 0.5 else 0
         if gripper_value:
             print("TRYING TO GRIP")
-        dType.SetEndEffectorGripper(api, 1, gripper_value, isQueued=1)
+        
+        # CHANGED: Swapped to SuctionCup logic
+        dType.SetEndEffectorSuctionCup(api, 1, gripper_value, isQueued=0)
         
         # suction_value = 1 if gripper > 0.5 else 0
         # dType.SetEndEffectorSuctionCup(api, 1, suction_value, isQueued=1)
@@ -238,5 +252,6 @@ finally:
     dType.SetQueuedCmdClear(api)
     dType.SetQueuedCmdStopExec(api) # Optional, but good practice
     cap.release()
+    cap2.release()
     cv2.destroyAllWindows()
     dType.DisconnectDobot(api)
