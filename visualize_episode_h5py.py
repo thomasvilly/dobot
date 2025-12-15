@@ -6,7 +6,7 @@ import numpy as np
 # --- CONFIGURATION ---
 DATASET_DIR = "dataset_hdf5"
 JOB_NAME = "pick_up_red_block"
-EPISODE_NAME = "episode_006.h5" # Make sure this file actually exists!
+EPISODE_NAME = "episode_010.h5" # Make sure this file actually exists!
 
 EPISODE_FILE = os.path.join(DATASET_DIR, JOB_NAME, EPISODE_NAME)
 

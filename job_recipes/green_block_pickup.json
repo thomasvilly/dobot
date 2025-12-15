@@ -1,0 +1,14 @@
+{
+  "job_id": "pick_up_green_block",
+  "instruction": "Pick up the green block",
+  "settings": {
+    "step_size_mm": 12.0,
+    "wait_time_sec": 0.2
+  },
+  "segments": [
+    { "type": "move", "target": [96, -142, -25, -55], "desc": "Approach Block" },
+    { "type": "action", "suction": 1, "desc": "Grab Block" },
+    { "type": "move", "target": [96, -142, -10, -55], "desc": "Lift Block" },
+    { "type": "move", "target": [200, 0, 50, 0], "desc": "Return Home" }
+  ]
+}

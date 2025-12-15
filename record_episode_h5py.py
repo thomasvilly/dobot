@@ -81,11 +81,14 @@ def initialize_hardware():
     dType.SetQueuedCmdClear(api)
     dType.SetPTPCommonParams(api, 100, 100, isQueued=0) # Velocity/Accel %
     
+    # # 2. Homing
+    # print("Homing Robot (Please wait ~20s)...")
+    # dType.SetHOMECmd(api, temp=0, isQueued=1)
+    # dType.SetQueuedCmdStartExec(api)
+    # time.sleep(20) # Simple wait for homing to finish
     # 2. Homing
-    print("Homing Robot (Please wait ~20s)...")
-    dType.SetHOMECmd(api, temp=0, isQueued=1)
-    dType.SetQueuedCmdStartExec(api)
-    time.sleep(20) # Simple wait for homing to finish
+    print("Moving to Safe Start Position...")
+    move_robot_block(200, 0, 50, 0)
 
     # 3. Open Cameras (Top + Side)
     # NOTE: Adjust indices (0, 1, 2) based on your USB ports

@@ -6,9 +6,9 @@
     "wait_time_sec": 0.2
   },
   "segments": [
-    { "type": "move", "target": [140, -190, -61, -38], "desc": "Approach Block" },
+    { "type": "move", "target": [90, -161, -32, -61], "desc": "Approach Block" },
     { "type": "action", "suction": 1, "desc": "Grab Block" },
-    { "type": "move", "target": [140, -109, -21, -38], "desc": "Lift Block" },
+    { "type": "move", "target": [90, -61, -10, -61], "desc": "Lift Block" },
     { "type": "move", "target": [200, 0, 50, 0], "desc": "Return Home" }
   ]
 }
