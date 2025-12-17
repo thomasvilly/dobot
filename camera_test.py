@@ -3,7 +3,7 @@ import cv2
 # List of camera indexes to try. 
 # 0 is usually the default/built-in webcam.
 # 1, 2, etc., are usually USB webcams.
-camera_indexes = [1, 2] 
+camera_indexes = [0, 1] 
 
 # List to hold open camera objects
 captures = []
