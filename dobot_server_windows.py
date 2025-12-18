@@ -36,9 +36,14 @@ def init_robot():
     
     dType.ClearAllAlarmsState(api)
     dType.SetQueuedCmdClear(api)
-    dType.SetPTPCommonParams(api, 100, 100, isQueued=0)
     
-    # Initialize Cameras (Using Indices 0 and 1 per your check)
+    # --- CRITICAL FIX: REDUCE SPEED & ACCELERATION ---
+    # Default is 100, 100. We drop to 50% to prevent "Jerk" alarms.
+    dType.SetPTPCommonParams(api, 50, 50, isQueued=0) 
+    dType.SetPTPJointParams(api, 50, 50, 50, 50, 50, 50, 50, 50, isQueued=0)
+    dType.SetPTPCoordinateParams(api, 50, 50, 50, 50, isQueued=0)
+    # -------------------------------------------------
+    
     print("Opening Cameras...")
     cam_overhead = cv2.VideoCapture(0, cv2.CAP_DSHOW) 
     cam_wrist = cv2.VideoCapture(1, cv2.CAP_DSHOW)
@@ -54,31 +59,41 @@ def init_robot():
     return api, cam_overhead, cam_wrist
 
 def move_robot(api, cam_overhead, cam_wrist, x, y, z, r):
-    # Auto-Clear Alarms to prevent 'red light' stops
+    # 1. Safety Clear (Fixes 'Red Light' stops)
     dType.ClearAllAlarmsState(api)
     
-    dType.SetPTPCmd(api, dType.PTPMode.PTPMOVJXYZMode, x, y, z, r, isQueued=0)
+    # 2. Clamp 'r' (Rotation)
+    # The servo breaks if you go beyond -150/150.
+    r = max(-150, min(150, r))
+    
+    # 3. Send Command (Immediate Mode)
+    last_index = dType.SetPTPCmd(api, dType.PTPMode.PTPMOVJXYZMode, x, y, z, r, isQueued=0)[0]
     
     target = np.array([x, y, z])
     start = time.time()
     
-    # --- MOVEMENT LOOP (Now with Live Video) ---
+    # 4. "Locking" Loop
     while True:
-        # 1. Read Cameras & Update Display
+        # Update Cameras
         ret1, frame1 = cam_overhead.read()
         ret2, frame2 = cam_wrist.read()
-        if ret1 and ret2:
-            update_monitor(frame1, frame2)
+        if ret1 and ret2: update_monitor(frame1, frame2)
 
-        # 2. Check Robot Position
+        # Get Current Position
         pose = dType.GetPose(api)
         curr = np.array(pose[0:3])
         
-        # Check arrival or timeout
-        if np.linalg.norm(curr - target) < 2.0: break
-        if time.time() - start > 5.0: break
+        # STOP CONDITION 1: We are there (within 2mm)
+        dist = np.linalg.norm(curr - target)
+        if dist < 2.0: 
+            break
+            
+        # STOP CONDITION 2: Timeout (Robot stuck/alarmed)
+        # Increased to 5.0s because we slowed down the robot
+        if time.time() - start > 5.0: 
+            print("WARN: Move timeout (Robot stuck?)")
+            break
         
-        # Small sleep to prevent CPU hogging (camera read adds natural delay anyway)
         time.sleep(0.005)
 
 def set_gripper(api, state):
@@ -89,74 +104,95 @@ def main():
     api, cam_overhead, cam_wrist = init_robot()
     print(f"✅ Server Listening on {HOST}:{PORT}...")
     
+    # Create the socket once
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind((HOST, PORT))
         s.listen()
-        conn, addr = s.accept()
-        with conn:
-            print(f"Connected by {addr}")
-            while True:
-                try:
-                    # 1. Receive Command
-                    raw_len = conn.recv(4)
-                    if not raw_len: break
-                    msg_len = struct.unpack('>I', raw_len)[0]
-                    
-                    data = b''
-                    while len(data) < msg_len:
-                        packet = conn.recv(msg_len - len(data))
-                        if not packet: break
-                        data += packet
-                    
-                    command = json.loads(data.decode('utf-8'))
-                    response = {"status": "ok"}
-                    cmd_type = command.get("cmd")
-                    
-                    # 2. Process Command
-                    if cmd_type == "GET_IMAGE":
-                        ret1, frame1 = cam_overhead.read()
-                        ret2, frame2 = cam_wrist.read()
-                        
-                        if ret1 and ret2:
-                            # Update Monitor
-                            update_monitor(frame1, frame2)
-
-                            # Send to Linux
-                            _, buf1 = cv2.imencode('.jpg', frame1)
-                            _, buf2 = cv2.imencode('.jpg', frame2)
-                            img1_bytes = buf1.tobytes()
-                            img2_bytes = buf2.tobytes()
-                            
-                            payload = (
-                                struct.pack('>I', len(img1_bytes)) + img1_bytes +
-                                struct.pack('>I', len(img2_bytes)) + img2_bytes
-                            )
-                            conn.sendall(payload)
-                            continue 
-                        else:
-                            response = {"status": "error", "msg": "Camera read failed"}
-
-                    elif cmd_type == "MOVE":
-                        move_robot(api, cam_overhead, cam_wrist, 
-                                   command['x'], command['y'], command['z'], command['r'])                
-                    
-                    elif cmd_type == "GRIP":
-                        set_gripper(api, command['state'])
-                    
-                    elif cmd_type == "GET_POSE":
-                         pose = dType.GetPose(api)
-                         response["pose"] = list(pose)
-
-                    # 3. Send Response
-                    resp_bytes = json.dumps(response).encode('utf-8')
-                    conn.sendall(struct.pack('>I', len(resp_bytes)) + resp_bytes)
+        
+        # --- PERMANENT SERVER LOOP ---
+        while True:
+            print(f"Waiting for new connection...")
+            try:
+                conn, addr = s.accept() # Blocks here until Linux connects
+            except Exception as e:
+                print(f"Accept error: {e}")
+                time.sleep(1)
+                continue
+            
+            with conn:
+                print(f"Connected by {addr}")
                 
-                except ConnectionResetError:
-                    print("Connection reset by peer.")
-                    break
-                except Exception as e:
-                    print(f"Error: {e}")
-                    break
+                # SAFETY: Clear alarms/queues on new connection
+                # This fixes the "stuck" state if the previous run crashed
+                dType.ClearAllAlarmsState(api)
+                dType.SetQueuedCmdClear(api)
+
+                # --- CLIENT SESSION LOOP ---
+                while True:
+                    try:
+                        # 1. Receive Command Header
+                        raw_len = conn.recv(4)
+                        if not raw_len: 
+                            print("Client closed connection cleanly.")
+                            break
+                        msg_len = struct.unpack('>I', raw_len)[0]
+                        
+                        # 2. Receive Body
+                        data = b''
+                        while len(data) < msg_len:
+                            packet = conn.recv(msg_len - len(data))
+                            if not packet: raise ConnectionResetError("Partial packet")
+                            data += packet
+                        
+                        command = json.loads(data.decode('utf-8'))
+                        response = {"status": "ok"}
+                        cmd_type = command.get("cmd")
+                        
+                        # 3. Process Command
+                        if cmd_type == "GET_IMAGE":
+                            ret1, frame1 = cam_overhead.read()
+                            ret2, frame2 = cam_wrist.read()
+                            
+                            if ret1 and ret2:
+                                update_monitor(frame1, frame2)
+                                _, buf1 = cv2.imencode('.jpg', frame1)
+                                _, buf2 = cv2.imencode('.jpg', frame2)
+                                img1_bytes = buf1.tobytes()
+                                img2_bytes = buf2.tobytes()
+                                
+                                payload = (
+                                    struct.pack('>I', len(img1_bytes)) + img1_bytes +
+                                    struct.pack('>I', len(img2_bytes)) + img2_bytes
+                                )
+                                conn.sendall(payload)
+                                continue 
+                            else:
+                                response = {"status": "error", "msg": "Camera read failed"}
+
+                        elif cmd_type == "MOVE":
+                            move_robot(api, cam_overhead, cam_wrist, 
+                                       command['x'], command['y'], command['z'], command['r'])                
+                        
+                        elif cmd_type == "GRIP":
+                            set_gripper(api, command['state'])
+                        
+                        elif cmd_type == "GET_POSE":
+                             pose = dType.GetPose(api)
+                             response["pose"] = list(pose)
+
+                        # 4. Send JSON Response (For non-image commands)
+                        resp_bytes = json.dumps(response).encode('utf-8')
+                        conn.sendall(struct.pack('>I', len(resp_bytes)) + resp_bytes)
+                    
+                    except (ConnectionResetError, ConnectionAbortedError):
+                        print("Connection lost (Client crashed or disconnected).")
+                        break
+                    except Exception as e:
+                        print(f"Error in session: {e}")
+                        break
+            
+            print("Session ended. Cleaning up and re-listening...")
+            # Loop goes back to top -> s.accept()
 
 if __name__ == "__main__":
     main()
