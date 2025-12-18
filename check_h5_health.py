@@ -119,5 +119,19 @@ def main():
     plt.tight_layout()
     plt.show()
 
+    velocities = np.diff(flat_actions[:, :3], axis=0) # Shape: (N-1, 3)
+    
+    # Now calculate magnitude of the MOVEMENT
+    vel_magnitudes = np.linalg.norm(velocities, axis=1)
+    
+    # Check for TRUE Dead Frames (Movement < 0.5mm)
+    true_dead_frames = np.sum(vel_magnitudes < 0.5)
+    true_dead_percent = (true_dead_frames / len(vel_magnitudes)) * 100
+
+    print(f"\n[TRUE Velocity Health]")
+    print(f"  Mean Movement: {np.mean(vel_magnitudes):.4f} mm/step")
+    print(f"  Max Movement:  {np.max(vel_magnitudes):.4f} mm/step")
+    print(f"  Stationary Frames (<0.5mm): {true_dead_percent:.1f}%")
+
 if __name__ == "__main__":
     main()
