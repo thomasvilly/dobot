@@ -3,7 +3,7 @@ import cv2
 # List of camera indexes to try. 
 # 0 is usually the default/built-in webcam.
 # 1, 2, etc., are usually USB webcams.
-camera_indexes = [0, 1] 
+camera_indexes = [1] 
 
 # List to hold open camera objects
 captures = []
@@ -13,6 +13,11 @@ print("Initializing cameras...")
 for index in camera_indexes:
     # Change the line inside the loop to:
     cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
+    exp_val = -5
+    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1) 
+    cap.set(cv2.CAP_PROP_EXPOSURE, exp_val)
+    print(f"Exposure set to: {exp_val}")
+
     if cap.isOpened():
         print(f"Camera {index} opened successfully.")
         captures.append(cap)

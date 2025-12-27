@@ -9,7 +9,8 @@ import DobotDllType as dType
 
 # --- CONFIGURATION ---
 DATASET_DIR = "dataset_hdf5/interactive_session"
-CAM_INDEX = 1  # Top-Down Camera Index (Change if needed)
+CAM_INDEX = 1  # Top-Down Camera Index
+EXPOSURE_VAL = -5 # <--- NEW: Hardcoded Exposure
 
 # Workspace constraints (Safe box for random generation)
 # Adjust these to match your table!
@@ -25,7 +26,7 @@ WAIT_TIME = 0.2       # Pause between steps (for clean images)
 SAFETY = {
     "x_min": 140, "x_max": 280,
     "y_min": -200, "y_max": 200,
-    "z_min": -100,  "z_max": 150,
+    "z_min": -65,  "z_max": 150,
     "r_min": -150, "r_max": 150
 }
 
@@ -49,6 +50,14 @@ def initialize():
     cam = cv2.VideoCapture(CAM_INDEX, cv2.CAP_DSHOW)
     cam.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    
+    # --- NEW: FORCE EXPOSURE SETTINGS ---
+    # 1. Disable Auto Exposure (1 = Manual)
+    cam.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1) 
+    # 2. Set Exposure Value
+    cam.set(cv2.CAP_PROP_EXPOSURE, EXPOSURE_VAL)
+    print(f"--> Exposure Locked to {EXPOSURE_VAL}")
+    # ------------------------------------
     
     if not cam.isOpened():
         print("[ERROR] Camera Failed! Check USB.")
@@ -125,57 +134,37 @@ def generate_noisy_path(start, end):
 
 # --- CORE RECORDING ---
 def execute_episode(start_pos, target_pos):
-    """
-    Executes the 'Inverted Loop':
-    1. Look at Next Target
-    2. Capture Image (State t)
-    3. Record Label (Action = Go to t+1)
-    4. Move to t+1
-    """
     buffer = []
-    
-    # 1. Generate Path
     path = generate_noisy_path(start_pos, target_pos)
     
-    # 2. Reset Robot
     print("--> Resetting to Start...")
     set_gripper(False)
     move_robot(*start_pos)
-    input("--> Place Block at Target (Robot showed you). Remove Hands. Press ENTER.")
+    input("--> Place GREEN Block at Target. Remove Hands. Press ENTER.")
     
     print("--> Recording...")
     
-    # 3. Execution Loop
     for i in range(len(path)):
         target_waypoint = path[i]
         
-        # A. Capture Image (At Current State)
         ret, frame = cam.read()
         if not ret: print("[WARN] Frame drop"); continue
         
-        # B. Get Current Proprio
         current_state_vec = get_state()
+        action_vec = list(target_waypoint) + [0.0, 0.0, 0.0] 
         
-        # C. Define Action (Where are we going?)
-        # Action = The coordinate of the NEXT waypoint
-        action_vec = list(target_waypoint) + [0.0, 0.0, 0.0] # Grip=0 (Open)
-        
-        # D. Save to Buffer
         buffer.append({
             'top': frame,
             'state': current_state_vec,
             'action': action_vec
         })
         
-        # E. Execute Move
         move_robot(*target_waypoint)
         time.sleep(WAIT_TIME)
         
-    # 4. Grasp Action
-    # Record one frame of "staying still" before grasping
+    # Grasp Action
     ret, frame = cam.read()
     current_state_vec = get_state()
-    # Action = Stay here, Close Gripper
     grip_action_vec = list(target_pos) + [0.0, 0.0, 1.0] 
     
     buffer.append({
@@ -187,9 +176,9 @@ def execute_episode(start_pos, target_pos):
     set_gripper(True)
     time.sleep(0.5)
     
-    # 5. Lift (Post-Grasp)
+    # Lift
     lift_pos = list(target_pos)
-    lift_pos[2] += 50 # Up 5cm
+    lift_pos[2] += 50 
     move_robot(*lift_pos)
     
     return buffer
@@ -197,20 +186,20 @@ def execute_episode(start_pos, target_pos):
 def save_hdf5(buffer):
     if not os.path.exists(DATASET_DIR): os.makedirs(DATASET_DIR)
     
-    # Find next ID
     existing = glob.glob(os.path.join(DATASET_DIR, "episode_*.h5"))
     next_id = len(existing) + 1
     filename = os.path.join(DATASET_DIR, f"episode_{next_id:03d}.h5")
     
     print(f"--> Saving to {filename}...")
     
-    # Unpack
     imgs = [b['top'] for b in buffer]
     states = [b['state'] for b in buffer]
     actions = [b['action'] for b in buffer]
     
     with h5py.File(filename, 'w') as f:
-        f.attrs['instruction'] = "Pick up the red block"
+        # --- NEW: UPDATED INSTRUCTION ---
+        f.attrs['instruction'] = "Pick up the green block" 
+        # --------------------------------
         obs = f.create_group('observations')
         obs.create_dataset('images/top', data=np.array(imgs), compression="gzip")
         obs.create_dataset('state', data=np.array(states))
@@ -226,26 +215,23 @@ def main():
         print("\n=== GENERATING NEW TASK ===")
         start_pos, target_pos = generate_task()
         
-        # Phase 1: Show Target
         print(f"Target: {target_pos}")
         move_robot(*target_pos)
         
-        # Retry Loop (Same Target)
         while True:
             buffer = execute_episode(start_pos, target_pos)
             
-            # Review
             cmd = input("\n[S]ave | [D]elete & Retry | [N]ew Path | [Q]uit: ").upper()
             
             if cmd == 'S':
                 save_hdf5(buffer)
-                break # Break inner loop -> Generate New Task
+                break 
             elif cmd == 'D':
                 print("--> Retrying SAME path...")
-                continue # Restart inner loop -> Same Target
+                continue 
             elif cmd == 'N':
                 print("--> Discarding path.")
-                break # Break inner loop -> Generate New Task
+                break 
             elif cmd == 'Q':
                 dType.DisconnectDobot(api)
                 return
