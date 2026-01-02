@@ -10,18 +10,18 @@ import DobotDllType as dType
 # --- CONFIGURATION ---
 DATASET_DIR = "dataset_hdf5/interactive_session"
 CAM_INDEX = 1  # Using Index 1 (matches your working test)
-EXPOSURE_VAL = -5 
-BLOCK_COLOR = "green" 
+EXPOSURE_VAL = -8
+BLOCK_COLOR = "blue" 
 
 # Workspace constraints
 # Z set to -75 as requested
-TARGET_BOX = {"x": (120, 240), "y": (50, 150), "z": -75} 
-START_BOX  = {"x": (160, 190), "y": (-80, 80), "z": 50}  
+TARGET_BOX = {"x": (100, 200), "y": (30, 130), "z": -75} 
+START_BOX  = {"x": (40, 100), "y": (-30, 30), "z": 50}  
 
 # Task Settings
-STEP_SIZE_MM = 10.0   
-NOISE_MM = 5.0        
-WAIT_TIME = 0.2       
+STEP_SIZE_MM = 10.0
+NOISE_MM = 2.0
+WAIT_TIME = 0.1
 
 # Safety Limits 
 SAFETY = {
@@ -45,8 +45,9 @@ def initialize():
     cam = cv2.VideoCapture(CAM_INDEX, cv2.CAP_DSHOW)
     
     # Apply settings
-    cam.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1) 
-    cam.set(cv2.CAP_PROP_EXPOSURE, EXPOSURE_VAL)
+    if EXPOSURE_VAL != 0:
+        cam.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1) 
+        cam.set(cv2.CAP_PROP_EXPOSURE, EXPOSURE_VAL)
     
     if not cam.isOpened():
         print("[CRITICAL] Camera Failed to Open! Exiting.")

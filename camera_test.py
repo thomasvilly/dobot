@@ -13,10 +13,11 @@ print("Initializing cameras...")
 for index in camera_indexes:
     # Change the line inside the loop to:
     cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
-    exp_val = -5
-    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1) 
-    cap.set(cv2.CAP_PROP_EXPOSURE, exp_val)
-    print(f"Exposure set to: {exp_val}")
+    exp_val = -8
+    if exp_val != 0:
+        cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1) 
+        cap.set(cv2.CAP_PROP_EXPOSURE, exp_val)
+        print(f"Exposure set to: {exp_val}")
 
     if cap.isOpened():
         print(f"Camera {index} opened successfully.")
