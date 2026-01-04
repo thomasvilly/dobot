@@ -6,7 +6,7 @@ import glob
 
 # --- CONFIGURATION ---
 # UPDATED PATH: Recursive search in D:\DOBOT\dataset_hdf5
-DATA_DIR = r"D:\DOBOT\dataset_hdf5"
+DATA_DIR = r"C:\Code\dobot\dataset_hdf5\interactive_session" #r"D:\DOBOT\dataset_hdf5"
 # ---------------------
 
 def main():

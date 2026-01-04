@@ -1,198 +1,325 @@
+import os
+import sys
+import time
+import json
 import socket
 import struct
-import json
-import cv2
+import argparse
+import threading
 import numpy as np
-import DobotDllType as dType
-import time
+import cv2
+import requests
+import json_numpy
+json_numpy.patch()
 
-# --- CONFIG ---
-HOST = '192.168.208.1'  # Your Windows IP
-PORT = 65432
+# Try to import the Dobot driver wrapper
+try:
+    import DobotDllType as dType
+except ImportError:
+    print("[!] Error: 'DobotDllType.py' not found. Make sure it is in the same directory.")
+    sys.exit(1)
 
-def update_monitor(frame1, frame2):
-    """Helper to update the OpenCV window with index labels."""
-    if frame1 is None or frame2 is None: return
+# --- GLOBAL CONFIG ---
+# Safety & Movement Limits
+MAX_STEP_MM = 20.0
+MAX_RADIUS = 310.0
+MIN_RADIUS = 140.0
+Z_MIN = -90.0
+Z_MAX = 150.0
 
-    # Resize for display
-    view1 = cv2.resize(frame1, (320, 240))
-    view2 = cv2.resize(frame2, (320, 240))
-    
-    # Add Labels
-    cv2.putText(view1, "Idx 0: Overhead", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-    cv2.putText(view2, "Idx 1: Wrist", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-    
-    # Stack and Show
-    combined_view = np.hstack((view1, view2))
-    cv2.imshow("Robot Server Monitor", combined_view)
-    cv2.waitKey(1) # Keeps window responsive
+# Client Logic Params
+ACTION_SCALE = 1.0
+GRIPPER_THRESHOLD = 0.3
+INSTRUCTION = "pick up the blue block"
 
-def init_robot():
-    print("--- Initializing Robot (Windows Side) ---")
-    api = dType.load()
-    state = dType.ConnectDobot(api, "COM3", 115200)[0]
-    if state != dType.DobotConnect.DobotConnect_NoError:
-        raise Exception("Failed to connect to Dobot")
-    
-    dType.ClearAllAlarmsState(api)
-    dType.SetQueuedCmdClear(api)
-    
-    # --- CRITICAL FIX: REDUCE SPEED & ACCELERATION ---
-    # Default is 100, 100. We drop to 50% to prevent "Jerk" alarms.
-    dType.SetPTPCommonParams(api, 50, 50, isQueued=0) 
-    dType.SetPTPJointParams(api, 50, 50, 50, 50, 50, 50, 50, 50, isQueued=0)
-    dType.SetPTPCoordinateParams(api, 50, 50, 50, 50, isQueued=0)
-    # -------------------------------------------------
-    
-    print("Opening Cameras...")
-    cam_overhead = cv2.VideoCapture(0, cv2.CAP_DSHOW) 
-    cam_wrist = cv2.VideoCapture(1, cv2.CAP_DSHOW)
-
-    if not cam_overhead.isOpened() or not cam_wrist.isOpened():
-         print("WARNING: One or both cameras failed to open.")
-
-    cam_overhead.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cam_overhead.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-    cam_wrist.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cam_wrist.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-
-    return api, cam_overhead, cam_wrist
-
-def move_robot(api, cam_overhead, cam_wrist, x, y, z, r):
-    # 1. Safety Clear (Fixes 'Red Light' stops)
-    dType.ClearAllAlarmsState(api)
-    
-    # 2. Clamp 'r' (Rotation)
-    # The servo breaks if you go beyond -150/150.
-    r = max(-150, min(150, r))
-    
-    # 3. Send Command (Immediate Mode)
-    last_index = dType.SetPTPCmd(api, dType.PTPMode.PTPMOVJXYZMode, x, y, z, r, isQueued=0)[0]
-    
-    target = np.array([x, y, z])
-    start = time.time()
-    
-    # 4. "Locking" Loop
-    while True:
-        # Update Cameras
-        ret1, frame1 = cam_overhead.read()
-        ret2, frame2 = cam_wrist.read()
-        if ret1 and ret2: update_monitor(frame1, frame2)
-
-        # Get Current Position
-        pose = dType.GetPose(api)
-        curr = np.array(pose[0:3])
+# ==============================================================================
+# CLASS: DOBOT DRIVER (Hardware Layer)
+# ==============================================================================
+class DobotDriver:
+    def __init__(self, port="COM3"):
+        self.api = dType.load()
+        self.port = port
+        self.connected = False
+        self.cam_overhead = None
+        self.cam_wrist = None
+        self.gripper_state = 0
         
-        # STOP CONDITION 1: We are there (within 2mm)
-        dist = np.linalg.norm(curr - target)
-        if dist < 2.0: 
-            break
+        # Connect
+        print(f"[Driver] Connecting to Dobot on {port}...")
+        state = dType.ConnectDobot(self.api, port, 115200)[0]
+        if state == dType.DobotConnect.DobotConnect_NoError:
+            print("[Driver] Dobot Connected.")
+            self.connected = True
+            self._setup_robot()
+        else:
+            print("[Driver] Failed to connect to Dobot. Check USB/Power.")
+            # We don't exit here to allow debugging cameras without robot if needed
             
-        # STOP CONDITION 2: Timeout (Robot stuck/alarmed)
-        # Increased to 5.0s because we slowed down the robot
-        if time.time() - start > 5.0: 
-            print("WARN: Move timeout (Robot stuck?)")
-            break
+        # Open Cameras
+        self._setup_cameras()
+
+    def _setup_robot(self):
+        dType.ClearAllAlarmsState(self.api)
+        dType.SetQueuedCmdClear(self.api)
         
-        time.sleep(0.005)
+        # Slow down for safety
+        # dType.SetPTPCommonParams(self.api, 50, 50, isQueued=0)
+        # dType.SetPTPJointParams(self.api, 50, 50, 50, 50, 50, 50, 50, 50, isQueued=0)
+        # dType.SetPTPCoordinateParams(self.api, 50, 50, 50, 50, isQueued=0)
 
-def set_gripper(api, state):
-    enable = 1 if state > 0.5 else 0
-    dType.SetEndEffectorSuctionCup(api, 1, enable, isQueued=0)
+    def _setup_cameras(self):
+        print("[Driver] Opening cameras...")
+        # Index 0/1 might swap depending on USB ports
+        self.cam_overhead = cv2.VideoCapture(1, cv2.CAP_DSHOW)
+        
+        # Set Resolution (Standard 640x480)
+        for cam in [self.cam_overhead]:
+            if cam and cam.isOpened():
+                cam.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            else:
+                print("[Driver] Warning: A camera failed to open.")
 
-def main():
-    api, cam_overhead, cam_wrist = init_robot()
-    print(f"✅ Server Listening on {HOST}:{PORT}...")
+    def get_pose(self):
+        """Returns [x, y, z]"""
+        if not self.connected: return [200, 0, 0]
+        pose = dType.GetPose(self.api)
+        return np.array(pose[:3])
+
+    def get_images(self):
+        """Returns (overhead_bgr, wrist_bgr)"""
+        img1 = np.zeros((480, 640, 3), dtype=np.uint8)
+        
+        if self.cam_overhead and self.cam_overhead.isOpened():
+            ret, frame = self.cam_overhead.read()
+            if ret: img1 = frame
+            
+        return img1
+
+    def move(self, x, y, z):
+        if not self.connected: return
+        
+        # Clear Alarms before move (prevents 'Red Light' lockups)
+        dType.ClearAllAlarmsState(self.api)
+        
+        # Execute PTP Move
+        dType.SetPTPCmd(self.api, dType.PTPMode.PTPMOVJXYZMode, x, y, z, 0, isQueued=0)
+        
+        # Wait for arrival (Simple blocking)
+        target = np.array([x, y, z])
+        start_t = time.time()
+        while time.time() - start_t < 5.0:
+            curr = self.get_pose()[:3]
+            if np.linalg.norm(curr - target) < 2.0:
+                break
+            time.sleep(0.01)
+
+    def grip(self, state):
+        """state: 0 (Open) or 1 (Closed)"""
+        if not self.connected: return
+        self.gripper_state = state
+        enable = 1 if state > 0.5 else 0
+        dType.SetEndEffectorSuctionCup(self.api, 1, enable, isQueued=0)
+
+    def close(self):
+        dType.DisconnectDobot(self.api)
+        if self.cam_overhead: self.cam_overhead.release()
+        if self.cam_wrist: self.cam_wrist.release()
+
+
+# ==============================================================================
+# MODE A: HTTP CLIENT (Talks to Linux 'deploy.py')
+# ==============================================================================
+def check_safety_clamp(target_xyz, current_xyz):
+    """Prevents the robot from hitting itself or moving too fast."""
+    x, y, z = target_xyz
     
-    # Create the socket once
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind((HOST, PORT))
-        s.listen()
-        
-        # --- PERMANENT SERVER LOOP ---
+    # 1. Z-Limit
+    z = np.clip(z, Z_MIN, Z_MAX)
+
+    # 2. Radius Limit (Don't hit base, don't overstretch)
+    radius = np.sqrt(x**2 + y**2)
+    if radius > MAX_RADIUS:
+        scale = MAX_RADIUS / radius
+        x *= scale; y *= scale
+    elif radius < MIN_RADIUS:
+        scale = MIN_RADIUS / radius
+        x *= scale; y *= scale
+
+    # 3. Velocity Clamp (Prevent teleporting)
+    cur_x, cur_y, cur_z = current_xyz
+    dist_sq = (x - cur_x)**2 + (y - cur_y)**2 + (z - cur_z)**2
+    if dist_sq > MAX_STEP_MM**2:
+        scale = np.sqrt(MAX_STEP_MM**2 / dist_sq)
+        x = cur_x + (x - cur_x) * scale
+        y = cur_y + (y - cur_y) * scale
+        z = cur_z + (z - cur_z) * scale
+
+    return x, y, z
+
+def run_http_client(driver, brain_ip, brain_port):
+    url = f"http://{brain_ip}:{brain_port}/act"
+    print(f"\n[Mode: Client] Connecting to Brain at {url}...")
+    
+    step = 0
+    current_gripper = 0
+    
+    print(">>> Press Ctrl+C to STOP.")
+    try:
         while True:
-            print(f"Waiting for new connection...")
+            t0 = time.time()
+            
+            # 1. Get Hardware State
+            img_overhead = driver.get_images() # Wrist img unused for now
+            pose_4d = driver.get_pose()
+            
+            # Show Feed
+            cv2.imshow("Robot Eye", img_overhead)
+            if cv2.waitKey(1) & 0xFF == ord('q'): break
+            
+            # Convert to RGB for Model
+            img_rgb = cv2.cvtColor(img_overhead, cv2.COLOR_BGR2RGB)
+            
+            # 2. Construct Payload
+            payload = {
+                    "full_image": img_rgb.tolist(),
+                    "state": [pose_4d[0], pose_4d[1], pose_4d[2], float(current_gripper)],
+                    "instruction": INSTRUCTION
+            }
+            
+            # 3. Query Brain
             try:
-                conn, addr = s.accept() # Blocks here until Linux connects
+                resp = requests.post(url, json=payload, timeout=5.0)
+                if resp.status_code != 200:
+                    print(f"[!] Server Error {resp.status_code}: {resp.text}")
+                    continue
+                action = np.array(resp.json())
             except Exception as e:
-                print(f"Accept error: {e}")
-                time.sleep(1)
+                print(f"[!] Network Error: {e}")
+                time.sleep(0.5)
                 continue
             
+            # 4. Parse Action
+            # Handle chunking (model might return [10, 4] list)
+            print(action)
+            action = action[:5]
+            for i, act in enumerate(action):
+                delta_xyz = act[:3] * ACTION_SCALE
+                raw_gripper = act[-1]
+                
+                # Gripper Logic
+                if raw_gripper > GRIPPER_THRESHOLD: current_gripper = 1
+                elif raw_gripper < -GRIPPER_THRESHOLD: current_gripper = 0
+                
+                pose_4d = driver.get_pose() 
+                current_xyz = pose_4d[:3]
+                
+                target_xyz = current_xyz + delta_xyz
+                safe_x, safe_y, safe_z = check_safety_clamp(target_xyz, current_xyz)
+                
+                dt = time.time() - t0
+                print(f"Step {step} ({dt:.3f}s) | Delta: {np.round(delta_xyz, 1)} | Grip: {raw_gripper:.2f}")
+                driver.move(safe_x, safe_y, safe_z)
+                driver.grip(current_gripper)
+                step += 1
+            
+    except KeyboardInterrupt:
+        print("\nStopping...")
+    finally:
+        cv2.destroyAllWindows()
+
+
+# ==============================================================================
+# MODE B: SOCKET SERVER (Legacy / Debug Mode)
+# ==============================================================================
+def run_socket_server(driver, port):
+    print(f"\n[Mode: Server] Listening on 0.0.0.0:{port}...")
+    
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('0.0.0.0', port))
+        s.listen()
+        
+        while True:
+            print("Waiting for connection...")
+            conn, addr = s.accept()
             with conn:
                 print(f"Connected by {addr}")
-                
-                # SAFETY: Clear alarms/queues on new connection
-                # This fixes the "stuck" state if the previous run crashed
-                dType.ClearAllAlarmsState(api)
-                dType.SetQueuedCmdClear(api)
-
-                # --- CLIENT SESSION LOOP ---
                 while True:
                     try:
-                        # 1. Receive Command Header
+                        # 1. Header
                         raw_len = conn.recv(4)
-                        if not raw_len: 
-                            print("Client closed connection cleanly.")
-                            break
+                        if not raw_len: break
                         msg_len = struct.unpack('>I', raw_len)[0]
                         
-                        # 2. Receive Body
+                        # 2. Body
                         data = b''
                         while len(data) < msg_len:
                             packet = conn.recv(msg_len - len(data))
-                            if not packet: raise ConnectionResetError("Partial packet")
+                            if not packet: break
                             data += packet
                         
-                        command = json.loads(data.decode('utf-8'))
-                        response = {"status": "ok"}
-                        cmd_type = command.get("cmd")
+                        cmd = json.loads(data.decode('utf-8'))
+                        resp = {"status": "ok"}
+                        ctype = cmd.get("cmd")
                         
-                        # 3. Process Command
-                        if cmd_type == "GET_IMAGE":
-                            ret1, frame1 = cam_overhead.read()
-                            ret2, frame2 = cam_wrist.read()
+                        # 3. Dispatch
+                        if ctype == "GET_IMAGE":
+                            img1, img2 = driver.get_images()
+                            # Encode
+                            _, b1 = cv2.imencode('.jpg', img1)
+                            _, b2 = cv2.imencode('.jpg', img2)
+                            b1_bytes = b1.tobytes()
+                            b2_bytes = b2.tobytes()
                             
-                            if ret1 and ret2:
-                                update_monitor(frame1, frame2)
-                                _, buf1 = cv2.imencode('.jpg', frame1)
-                                _, buf2 = cv2.imencode('.jpg', frame2)
-                                img1_bytes = buf1.tobytes()
-                                img2_bytes = buf2.tobytes()
-                                
-                                payload = (
-                                    struct.pack('>I', len(img1_bytes)) + img1_bytes +
-                                    struct.pack('>I', len(img2_bytes)) + img2_bytes
-                                )
-                                conn.sendall(payload)
-                                continue 
-                            else:
-                                response = {"status": "error", "msg": "Camera read failed"}
-
-                        elif cmd_type == "MOVE":
-                            move_robot(api, cam_overhead, cam_wrist, 
-                                       command['x'], command['y'], command['z'], command['r'])                
-                        
-                        elif cmd_type == "GRIP":
-                            set_gripper(api, command['state'])
-                        
-                        elif cmd_type == "GET_POSE":
-                             pose = dType.GetPose(api)
-                             response["pose"] = list(pose)
-
-                        # 4. Send JSON Response (For non-image commands)
-                        resp_bytes = json.dumps(response).encode('utf-8')
+                            # Send Raw Bytes
+                            payload = struct.pack('>I', len(b1_bytes)) + b1_bytes + \
+                                      struct.pack('>I', len(b2_bytes)) + b2_bytes
+                            conn.sendall(payload)
+                            continue # Skip JSON response for images
+                            
+                        elif ctype == "GET_POSE":
+                            resp["pose"] = driver.get_pose().tolist()
+                            
+                        elif ctype == "MOVE":
+                            driver.move(cmd['x'], cmd['y'], cmd['z'], cmd.get('r', 0))
+                            
+                        elif ctype == "GRIP":
+                            driver.grip(cmd['state'])
+                            
+                        # 4. Send JSON Response
+                        resp_bytes = json.dumps(resp).encode('utf-8')
                         conn.sendall(struct.pack('>I', len(resp_bytes)) + resp_bytes)
-                    
-                    except (ConnectionResetError, ConnectionAbortedError):
-                        print("Connection lost (Client crashed or disconnected).")
-                        break
+                        
                     except Exception as e:
-                        print(f"Error in session: {e}")
+                        print(f"Session Error: {e}")
                         break
-            
-            print("Session ended. Cleaning up and re-listening...")
-            # Loop goes back to top -> s.accept()
+            print("Client disconnected.")
 
+
+# ==============================================================================
+# MAIN ENTRY POINT
+# ==============================================================================
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Dobot Hybrid Controller")
+    parser.add_argument("--mode", choices=["client", "server"], required=True, help="Run as 'client' (Talks to Linux) or 'server' (Listens for Linux)")
+    parser.add_argument("--ip", type=str, default="192.168.219.198", help="Linux Brain IP (Client Mode)")
+    parser.add_argument("--port", type=int, default=8777, help="Port (Client Mode=Brain Port, Server Mode=Local Port)")
+    parser.add_argument("--dobot_port", type=str, default="COM3", help="Windows COM Port for Robot")
+    
+    args = parser.parse_args()
+    
+    # Initialize Driver
+    driver = DobotDriver(port=args.dobot_port)
+    
+    try:
+        if args.mode == "client":
+            # Windows (Logic) -> HTTP -> Linux (Brain)
+            run_http_client(driver, args.ip, args.port)
+        else:
+            # Windows (Hardware) <- Socket <- Linux (Logic)
+            run_socket_server(driver, 65432) # Default socket port from your old script
+    except KeyboardInterrupt:
+        pass
+    finally:
+        driver.close()
+        print("[System] Driver Closed.")
