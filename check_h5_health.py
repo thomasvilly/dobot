@@ -80,15 +80,12 @@ def main():
 
     # --- ANALYSIS 2: GRIPPER ---
     # Assuming gripper is the last dimension
-    if flat_actions.shape[1] >= 5:
-        gripper = flat_actions[:, -1]
-        unique_grips, counts = np.unique(np.round(gripper, 2), return_counts=True)
-        
-        print(f"\n[Gripper Health]")
-        for val, count in zip(unique_grips, counts):
-            print(f"    Value {val}: {count} frames ({count/len(gripper)*100:.1f}%)")
-    else:
-        print("\n[Gripper Health] Skipped (Action dim < 5)")
+    gripper = flat_actions[:, -1]
+    unique_grips, counts = np.unique(np.round(gripper, 2), return_counts=True)
+    
+    print(f"\n[Gripper Health]")
+    for val, count in zip(unique_grips, counts):
+        print(f"    Value {val}: {count} frames ({count/len(gripper)*100:.1f}%)")
 
     # --- PLOTTING ---
     fig, axs = plt.subplots(2, 2, figsize=(12, 10))

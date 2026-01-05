@@ -10,7 +10,7 @@ import DobotDllType as dType
 # --- CONFIGURATION ---
 DATASET_DIR = "dataset_hdf5/interactive_session"
 CAM_INDEX = 1  # Using Index 1 (matches your working test)
-EXPOSURE_VAL = -8
+EXPOSURE_VAL = -6
 BLOCK_COLOR = "blue" 
 
 # Workspace constraints
