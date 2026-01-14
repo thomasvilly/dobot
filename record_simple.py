@@ -142,7 +142,7 @@ def run_simple_episode():
             print(f"--> Robot Finished (Index {current_index} >= {last_index})")
             break
             
-        time.sleep(0.05) 
+        # time.sleep(0.05) 20Hz
 
     dType.SetQueuedCmdStopExec(api)
     dType.SetQueuedCmdClear(api)

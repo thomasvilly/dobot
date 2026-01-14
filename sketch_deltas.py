@@ -4,11 +4,11 @@ import matplotlib.pyplot as plt
 import os
 
 # --- CONFIGURATION ---
-FILE_PATH = "dataset_hdf5/simple_session/episode_002.h5" 
+FILE_PATH = "dataset_hdf5/simple_session/episode_004.h5" 
 OUTPUT_PLOT = "debug_rolling_stride.png"
 
 RECORDING_HZ = 10 
-STRIDE = 3         
+STRIDE = 3
 GAUSSIAN_SIGMA = 1.0 
 
 # --- REPLACEMENT FOR SCIPY ---

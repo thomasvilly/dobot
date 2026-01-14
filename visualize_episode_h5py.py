@@ -6,7 +6,7 @@ import pandas as pd
 
 # --- CONFIGURATION ---
 DATASET_DIR = "dataset_hdf5"
-JOB_NAME = "interactive_session_fixed"
+JOB_NAME = "simple_session"
 EPISODE_NAME = "episode_004.h5" 
 CSV_OUTPUT = "episode_analysis.csv"
 
