@@ -18,11 +18,11 @@ Z_SAFE = -40.0
 Z_PICK = -75.0  
 Z_HOVER = 50.0 
 
-PICK_ZONE  = {"x": (180, 220), "y": (-120, 0)}
-PLACE_ZONE = {"x": (180, 220), "y": (80, 200)}
-HOME_ZONE  = {"x": (180, 220), "y": (0, 80)}
+PICK_ZONE  = {"x": (80, 160), "y": (-120, 0)}
+PLACE_ZONE = {"x": (140, 220), "y": (80, 200)}
+HOME_ZONE  = {"x": (120, 180), "y": (0, 80)}
 
-RECORDING_HZ = 5
+RECORDING_HZ = 10
 MOVE_DURATION = 3.0
 ACTION_DURATION = 1.0
 
@@ -42,7 +42,7 @@ def move_wait(x, y, z):
     dType.SetQueuedCmdClear(api)
     time.sleep(0.5) # Wait for Clear
     
-    last_idx = dType.SetPTPCmd(api, dType.PTPMode.PTPMOVJXYZMode, x, y, z, 0, isQueued=1)[0]
+    last_idx = dType.SetCPCmd(api, 1, x, y, z, 100.0, isQueued=1)[0]
     dType.SetQueuedCmdStartExec(api)
     
     while dType.GetQueuedCmdCurrentIndex(api)[0] < last_idx:
@@ -73,7 +73,7 @@ def initialize():
     time.sleep(1.0)
     
     # LOWERED SPEED to 20 to fix Jitter/Fast Move
-    dType.SetPTPCommonParams(api, 20, 20, isQueued=1) 
+    dType.SetCPParams(api, 50, 100, 50, 1, isQueued=1)
     
     print("--> Ready.")
 
@@ -91,14 +91,58 @@ def get_real_state():
         suck_state = -1.0
     return list(pose[0:4]) + [0.0, 0.0, suck_state]
 
-def generate_s_curve(start, end, steps):
+def generate_s_curve(start, end, steps, accel_fraction=0.15):
+    """
+    Trapezoidal Velocity Profile (The "Table Top").
+    
+    Args:
+        start, end: Coordinates
+        steps: Total number of points
+        accel_fraction: 0.15 means 15% accel, 70% flat speed, 15% decel.
+                        Smaller number = Steeper acceleration (flatter top).
+    """
     start = np.array(start)
     end = np.array(end)
-    t = np.linspace(0, 1, steps)
-    s_curve = (1 - np.cos(t * np.pi)) / 2
+    
+    # 1. Define the number of steps for each phase
+    # Ensure at least 1 step for accel/decel to avoid errors
+    n_accel = max(1, int(steps * accel_fraction))
+    n_decel = max(1, int(steps * accel_fraction))
+    n_flat  = steps - n_accel - n_decel
+    
+    # 2. Build the Velocity Profile (The "Table")
+    # / (Ramp Up)
+    v_ramp_up = np.linspace(0, 1, n_accel)
+    # - (Flat Top)
+    v_flat    = np.ones(n_flat)
+    # \ (Ramp Down)
+    v_ramp_down = np.linspace(1, 0, n_decel)
+    
+    # Combine them
+    velocity_profile = np.concatenate([v_ramp_up, v_flat, v_ramp_down])
+    
+    # 3. Integrate Velocity to get Position (The Path)
+    # Cumulative sum creates the S-shape from the trapezoid
+    position_profile = np.cumsum(velocity_profile)
+    
+    # 4. Normalize exactly to 0.0 -> 1.0 range
+    s_curve = (position_profile - position_profile.min()) / (position_profile.max() - position_profile.min())
+    
+    # Safety: Force exact start/end
+    s_curve[0] = 0.0
+    s_curve[-1] = 1.0
+
+    # 5. Interpolate (Just in case rounding errors changed the length)
+    if len(s_curve) != steps:
+        old_x = np.linspace(0, 1, len(s_curve))
+        new_x = np.linspace(0, 1, steps)
+        s_curve = np.interp(new_x, old_x, s_curve)
+
+    # 6. Apply to coordinates
     path = []
     for s in s_curve:
         path.append(start + (end - start) * s)
+        
     return path
 
 def plan_dynamic_episode(home_loc, pick_loc, place_loc):
@@ -116,6 +160,7 @@ def plan_dynamic_episode(home_loc, pick_loc, place_loc):
     p_pick_down   = [pick_loc[0], pick_loc[1], Z_PICK, 0.0]
     p_place_hover = [place_loc[0], place_loc[1], Z_SAFE, 0.0]
     p_place_down  = [place_loc[0], place_loc[1], Z_SAFE, 0.0]
+    p_place_done = [place_loc[0], place_loc[1], Z_HOVER-20, 0.0]
 
     add_segment(p_home, p_pick_hover, ACTION_DURATION, -1.0)
     add_segment(p_pick_hover, p_pick_down, ACTION_DURATION, -1.0)
@@ -126,7 +171,7 @@ def plan_dynamic_episode(home_loc, pick_loc, place_loc):
     add_segment(p_place_hover, p_place_down, ACTION_DURATION, 1.0)
     for _ in range(int(0.5 * RECORDING_HZ)):
         full_plan.append({'pos': p_place_down, 'suction': -1.0})
-    add_segment(p_place_down, p_place_hover, ACTION_DURATION, -1.0)
+    add_segment(p_place_down, p_place_done, ACTION_DURATION, -1.0)
 
     return full_plan
 
@@ -167,6 +212,11 @@ def run_safe_workflow():
     
     # We track the ACTUAL index the API gives us for the last command
     last_queued_api_index = 0
+
+    print("--> Clearing Camera Buffer... (Move hand away!)")
+    time.sleep(1.0) # Give you time to retreat
+    for _ in range(10): # Flush old frames (aggressive flush)
+        cam.read()
     
     print("--> Executing...")
     dType.SetQueuedCmdStartExec(api)
@@ -184,7 +234,7 @@ def run_safe_workflow():
             z = np.clip(wp['pos'][2], SAFETY["z_min"], SAFETY["z_max"])
             
             # Store the Return Value (The Ticket Number)
-            last_queued_api_index = dType.SetPTPCmd(api, dType.PTPMode.PTPMOVJXYZMode, x, y, z, 0, isQueued=1)[0]
+            last_queued_api_index = dType.SetCPCmd(api, 1, x, y, z, 100.0, isQueued=1)[0]
             set_suction_hardware(wp['suction'], queued=1)
             
             sent_cursor += 1
