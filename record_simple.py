@@ -10,14 +10,14 @@ import DobotDllType as dType
 # --- CONFIGURATION ---
 DATASET_DIR = "dataset_hdf5/simple_session"
 CAM_INDEX = 1
-EXPOSURE_VAL = -7
+EXPOSURE_VAL = -6
 
 # Workspace
 Z_SAFE = -30.0   
 Z_PICK = -75.0  
 Z_HOVER = 50.0 
 
-PICK_ZONE  = {"x": (80, 160), "y": (-120, 0)}
+PICK_ZONE  = {"x": (100, 160), "y": (-120, 0)}
 PLACE_ZONE = {"x": (140, 220), "y": (80, 200)}
 HOME_ZONE  = {"x": (120, 180), "y": (0, 80)}
 
@@ -110,7 +110,7 @@ def run_simple_episode():
     move_ptp(pick_x, pick_y, Z_SAFE)      
     move_ptp(pick_x, pick_y, Z_PICK)      
     set_suction(1.0)                      
-    dType.SetWAITCmd(api, 500, isQueued=1)
+    dType.SetWAITCmd(api, 1000, isQueued=1)
     move_ptp(pick_x, pick_y, Z_SAFE)      
     move_ptp(place_x, place_y, Z_SAFE)    
     move_ptp(place_x, place_y, Z_SAFE)    
