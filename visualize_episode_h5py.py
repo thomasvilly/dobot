@@ -7,7 +7,7 @@ import pandas as pd
 # --- CONFIGURATION ---
 DATASET_DIR = "dataset_hdf5"
 JOB_NAME = "simple_session"
-EPISODE_NAME = "episode_004.h5" 
+EPISODE_NAME = "episode_001.h5" 
 CSV_OUTPUT = "episode_analysis.csv"
 
 EPISODE_FILE = os.path.join(DATASET_DIR, JOB_NAME, EPISODE_NAME)

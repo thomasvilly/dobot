@@ -10,10 +10,10 @@ import DobotDllType as dType
 # --- CONFIGURATION ---
 DATASET_DIR = "dataset_hdf5/simple_session"
 CAM_INDEX = 1
-EXPOSURE_VAL = -6
+EXPOSURE_VAL = -7
 
 # Workspace
-Z_SAFE = -40.0   
+Z_SAFE = -30.0   
 Z_PICK = -75.0  
 Z_HOVER = 50.0 
 
@@ -161,6 +161,7 @@ def save_hdf5(buffer):
         f.create_dataset('observations/images/top', data=np.array([b['top'] for b in buffer]), compression="gzip")
         f.create_dataset('observations/state', data=np.array([b['state'] for b in buffer]))
         f.create_dataset('action', data=np.array([b['action'] for b in buffer]))
+        f.attrs['instruction'] = "pick up the blue block and put it on the plate"
     print("Saved.")
 
 def main():
