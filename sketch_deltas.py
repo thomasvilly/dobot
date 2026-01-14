@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import os
 
 # --- CONFIGURATION ---
-FILE_PATH = "dataset_hdf5/interactive_session_fixed/episode_004.h5" 
+FILE_PATH = "dataset_hdf5/simple_session/episode_002.h5" 
 OUTPUT_PLOT = "debug_rolling_stride.png"
 
 RECORDING_HZ = 10 
