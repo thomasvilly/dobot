@@ -4,3 +4,4 @@ __pycache__
 dataset_hdf5/
 local/
 *.csv
+venv/
