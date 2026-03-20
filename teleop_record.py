@@ -33,6 +33,7 @@ Architecture:
 import os
 import sys
 import time
+import json
 import cv2
 import numpy as np
 import h5py
@@ -77,9 +78,15 @@ def is_key_just_pressed(vk_code):
 
 DATASET_DIR   = "dataset_hdf5/teleop_session"
 CAM_INDEX     = 0
-EXPOSURE_VAL  = 0           # 0 = auto exposure
+EXPOSURE_VAL  = 0            # 0 = auto exposure
 RECORD_HZ     = 20           # target recording frequency
-INSTRUCTION   = "pick up the blue block and put it on the plate"
+
+# Task prompts are loaded from tasks.json in the script directory.
+# Format:  { "1": "pick up the blue block and put it on the plate",
+#             "2": "move the block to the left side", ... }
+# Keys are what you type to select; values are the instruction strings.
+TASKS_FILE    = "tasks.json"
+TASKS         = {}  # populated in initialize()
 
 # JOG speeds — tune these for comfortable teleoperation
 # Lower = more precise but slower.  Higher = faster but harder to control.
@@ -113,10 +120,10 @@ JOG_Z_NEG = 6
 # Map: Windows VK code → JOG command  (checked every tick via GetAsyncKeyState)
 # These are polled as "is this key held down RIGHT NOW?" — no event lag.
 HELD_KEY_TO_JOG = {
-    VK_D: JOG_X_POS,    # D → X+
-    VK_A: JOG_X_NEG,    # A → X-
-    VK_W: JOG_Y_POS,    # W → Y+  (forward)
-    VK_S: JOG_Y_NEG,    # S → Y-  (backward)
+    VK_D: JOG_Y_POS,    # D → Y+  (forward)
+    VK_A: JOG_Y_NEG,    # A → Y-  (backward)
+    VK_W: JOG_X_POS,    # W → X+
+    VK_S: JOG_X_NEG,    # S → X-
     VK_R: JOG_Z_POS,    # R → Z+  (up)
     VK_F: JOG_Z_NEG,    # F → Z-  (down)
 }
@@ -132,8 +139,27 @@ suction_on = False
 
 
 def initialize():
-    """Connect to Dobot, configure JOG parameters, open camera."""
-    global api, cam
+    """Connect to Dobot, configure JOG parameters, open camera, load tasks."""
+    global api, cam, TASKS
+
+    # --- Load task prompts from JSON ---
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    tasks_path = os.path.join(script_dir, TASKS_FILE)
+    if os.path.exists(tasks_path):
+        with open(tasks_path, 'r') as f:
+            TASKS = json.load(f)
+        print(f"[OK] Loaded {len(TASKS)} tasks from {TASKS_FILE}")
+    else:
+        # Create a default tasks.json so the user has a template
+        TASKS = {
+            "1": "pick up the blue block and put it on the plate",
+            "2": "pick up the block and place it to the left",
+            "3": "pick up the block and place it to the right",
+        }
+        with open(tasks_path, 'w') as f:
+            json.dump(TASKS, f, indent=2)
+        print(f"[INFO] No {TASKS_FILE} found — created default with {len(TASKS)} tasks.")
+        print(f"       Edit {tasks_path} to add your own.")
 
     # --- Load DLL & Connect ---
     api = dType.load()
@@ -183,7 +209,7 @@ def initialize():
     print("=" * 60)
     print("  DOBOT TELEOP RECORDER")
     print("=" * 60)
-    print("  W/S   = Y forward/back     A/D   = X left/right")
+    print("  W/S   = X left/right        A/D   = Y forward/back")
     print("  R/F   = Z up/down           SPACE = toggle suction")
     print("  ENTER = finish episode      ESC   = quit")
     print("  P     = pause recording     H     = go home")
@@ -273,14 +299,14 @@ def draw_hud(display_frame, state, recording, paused, suction, fps, frame_count)
                     (10, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1)
 
     # Key legend at bottom
-    legend = "W/S:Y  A/D:X  R/F:Z  SPACE:suck  ENTER:save  ESC:quit  P:pause  H:home"
+    legend = "W/S:X  A/D:Y  R/F:Z  SPACE:suck  ENTER:save  ESC:quit  P:pause  H:home"
     cv2.putText(display_frame, legend, (10, h - 10),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.38, (180, 180, 180), 1)
 
     return display_frame
 
 
-def save_hdf5(buffer, episode_num=None):
+def save_hdf5(buffer, instruction, episode_num=None):
     """Save episode buffer in the same format as record_simple.py."""
     if not buffer:
         print("[WARN] Empty buffer, nothing to save.")
@@ -294,6 +320,7 @@ def save_hdf5(buffer, episode_num=None):
 
     fname = os.path.join(DATASET_DIR, f"episode_{episode_num:03d}.h5")
     print(f"[SAVE] Writing {fname}  ({len(buffer)} frames) ...")
+    print(f"       Task: \"{instruction}\"")
 
     images = np.array([b['top'] for b in buffer])
     states = np.array([b['state'] for b in buffer], dtype=np.float32)
@@ -303,7 +330,7 @@ def save_hdf5(buffer, episode_num=None):
         f.create_dataset('observations/images/top', data=images, compression="gzip")
         f.create_dataset('observations/state', data=states)
         f.create_dataset('action', data=actions)
-        f.attrs['instruction'] = INSTRUCTION
+        f.attrs['instruction'] = instruction
 
     print(f"[SAVE] Done. {fname}")
 
@@ -470,6 +497,27 @@ def run_episode():
             fps = 0.9 * fps + 0.1 * instant_fps
 
 
+def prompt_task_selection():
+    """Show available tasks and let the user pick one. Returns the instruction string."""
+    print("\n[TASK] Select the task performed in this episode:")
+    keys_sorted = sorted(TASKS.keys(), key=lambda k: (k.isdigit(), k))
+    for k in keys_sorted:
+        print(f"    [{k}]  {TASKS[k]}")
+    print(f"    [c]  Custom (type your own)")
+
+    while True:
+        choice = input("[TASK] Enter selection: ").strip()
+        if choice.lower() == 'c':
+            custom = input("[TASK] Type custom instruction: ").strip()
+            if custom:
+                return custom
+            print("[WARN] Empty instruction, try again.")
+        elif choice in TASKS:
+            return TASKS[choice]
+        else:
+            print(f"[WARN] Invalid selection '{choice}'. Try again.")
+
+
 def main():
     initialize()
 
@@ -510,7 +558,8 @@ def main():
                 ans = input("[?] Save? [Y/N/Q]: ").strip().upper()
 
             if ans == 'Y':
-                save_hdf5(buf)
+                instruction = prompt_task_selection()
+                save_hdf5(buf, instruction)
             elif ans == 'Q':
                 break
             # else: discard and loop
